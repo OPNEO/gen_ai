@@ -14,7 +14,7 @@ from google.genai import Client
 # ---------------------------
 # Setup
 # ---------------------------
-client = Client(api_key="AIzaSyAMfbadIrd-ZnviynZ05jShUCM4VJMtOCY")
+client = Client(api_key="")
 MODEL = "gemini-3-flash-preview"
 
 embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
