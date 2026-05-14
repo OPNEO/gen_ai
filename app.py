@@ -247,22 +247,21 @@ async def main(message: cl.Message):
 
     full_answer = ""
 
+    msg = cl.Message(content="")
+    await msg.send()
+
     stream = client.models.generate_content_stream(
         model=MODEL,
         contents=prompt,
         config={
-            "temperature": 0.3
+            "temperature":0.3
         }
     )
 
-    async for chunk in stream:
-
-        if chunk.text:
+    for chunk in stream:
+        if hasattr(chunk, "text") and chunk.text:
             full_answer += chunk.text
             await msg.stream_token(chunk.text)
-
-    # Finalize message
-    await msg.send()
 
     # ---------------------------
     # Save memory
@@ -273,5 +272,4 @@ async def main(message: cl.Message):
     })
 
     history = history[-5:]
-
     cl.user_session.set("chat_history", history)
