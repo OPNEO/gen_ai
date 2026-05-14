@@ -1,6 +1,4 @@
-"""
-    FINAL: RAG + Gemini (Single Call + JD Matching + Memory)
-"""
+
 
 import chainlit as cl
 from pypdf import PdfReader
@@ -14,7 +12,7 @@ from google.genai import Client
 # ---------------------------
 # Setup
 # ---------------------------
-client = Client(api_key="")
+client = Client(api_key="AIzaSyAFvMwIJyPOkqSu3f_7L6Rk8eaiPiPbV4w")
 MODEL = "gemini-3-flash-preview"
 
 embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
@@ -23,6 +21,7 @@ embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
 # Helpers
 # ---------------------------
 def clean_text(text):
+    
     text = text.replace("\n", " ")
     text = text.replace("", "")
     text = re.sub(r"\s+", " ", text)
@@ -124,7 +123,23 @@ async def main(message: cl.Message):
     query_embedding = embedding_model.encode([query]).astype("float32")
     faiss.normalize_L2(query_embedding)
 
-    _, indices = index.search(query_embedding, 8)
+    memory = ""
+
+    for chat in history[-3:]:
+        memory += f"""
+        User: {chat['user']}
+        Assistant: {chat['assistant']}
+        """
+
+    # ---------------------------
+    # Single Unified Prompt
+    # ---------------------------
+    query_lower = query.lower()
+
+# Dynamic retrieval size
+    k = 3 if "hire" in query_lower else 8
+
+    _, indices = index.search(query_embedding, k)
 
     retrieved = [chunks[i] for i in indices[0]]
 
@@ -133,71 +148,130 @@ async def main(message: cl.Message):
 
     context = "\n\n".join(retrieved)
 
-    # ---------------------------
-    # Memory (last 3 messages)
-    # ---------------------------
-    memory = "\n".join(history[-3:])
+# ---------------------------
+# Dynamic Prompt Building
+# ---------------------------
 
-    # ---------------------------
-    # Single Unified Prompt
-    # ---------------------------
-    prompt = f"""
-You are an AI resume assistant.
+    if "score" in query_lower or "rate" in query_lower:
 
-Use ONLY the provided context.
+        prompt = f"""
+        You are a technical hiring manager.
 
---- CONTEXT ---
-{context}
+        Evaluate the candidate using ONLY the context.
 
---- CHAT HISTORY ---
-{memory}
+        Context:
+        {context}
 
---- JOB DESCRIPTION ---
-{jd if jd else "Not provided"}
+        Job Description:
+        {jd if jd else "Not provided"}
 
---- USER QUESTION ---
-{query}
+        Give:
+        - Score out of 10
+        - JD Match Percentage
+        - Strengths
+        - Weaknesses
+        - Recommendation
+        """
 
---- TASK ---
-1. Answer the question
-2. Extract relevant details if needed
-3. If JD is provided → match candidate with JD
-4. Provide score (out of 10)
-5. Give strengths, weaknesses, recommendation
+    elif "hire" in query_lower or "suitable" in query_lower:
 
---- OUTPUT FORMAT ---
-Answer:
-...
+        prompt = f"""
+        You are a hiring manager.
 
-Score:
-...
+        Based ONLY on the resume context,
+        tell whether this candidate should be hired.
 
-JD Match:
-...
+        Keep the answer concise and practical.
 
-Strengths:
-...
+        Context:
+        {context}
 
-Weaknesses:
-...
+        Job Description:
+        {jd if jd else "Not provided"}
 
-Recommendation:
-...
-"""
+        Question:
+        {query}
+        """
 
-    response = client.models.generate_content(
+    elif "skill" in query_lower:
+
+        prompt = f"""
+        Extract only the technical skills from the resume.
+
+        Context:
+        {context}
+        """
+
+    elif "experience" in query_lower:
+
+        prompt = f"""
+        Summarize the candidate's experience clearly.
+
+        Context:
+        {context}
+        """
+
+    elif "extract" in query_lower or "full" in query_lower:
+
+        prompt = f"""
+        Extract:
+        - Name
+        - Role
+        - Skills
+        - Experience
+
+        Context:
+        {context}
+        """
+
+    else:
+
+        prompt = f"""
+        You are a helpful AI resume assistant.
+
+        Use ONLY the provided context.
+
+        Previous Conversation:
+        {memory}
+
+        Context:
+        {context}
+
+        Question:
+        {query}
+
+        Answer naturally and concisely.
+        """
+
+    msg = cl.Message(content="")
+
+    full_answer = ""
+
+    stream = client.models.generate_content_stream(
         model=MODEL,
-        contents=prompt
+        contents=prompt,
+        config={
+            "temperature": 0.3
+        }
     )
 
-    answer = response.text
+    async for chunk in stream:
+
+        if chunk.text:
+            full_answer += chunk.text
+            await msg.stream_token(chunk.text)
+
+    # Finalize message
+    await msg.send()
 
     # ---------------------------
     # Save memory
     # ---------------------------
-    history.append(f"User: {query}")
-    history.append(f"Assistant: {answer}")
-    cl.user_session.set("chat_history", history)
+    history.append({
+        "user": query,
+        "assistant": full_answer
+    })
 
-  
-    await cl.Message(content=answer).send()
+    history = history[-5:]
+
+    cl.user_session.set("chat_history", history)
